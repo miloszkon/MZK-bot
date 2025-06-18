@@ -291,6 +291,35 @@ def run():
 def keep_alive():
     t = Thread(target=run)
     t.start()
+from discord.ext import commands
+from discord import Embed, app_commands
+import discord
+import os
+
+intents = discord.Intents.default()
+intents.message_content = True  # upewnij się, że to masz
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+@bot.event
+async def on_ready():
+    print(f'Zalogowano jako {bot.user}')
+    try:
+        synced = await bot.tree.sync()
+        print(f"Zsynchronizowano {len(synced)} komend slash.")
+    except Exception as e:
+        print(f"Błąd synchronizacji komend: {e}")
+
+@bot.tree.command(name="ogloszenie", description="Wysyła ogłoszenie jako embed")
+@app_commands.describe(tresc="Treść ogłoszenia do wysłania")
+async def ogloszenie(interaction: discord.Interaction, tresc: str):
+    embed = Embed(
+        title="📢 Ogłoszenie",
+        description=f"📝 {tresc}",
+        color=0x2ecc71  # zielony embed, możesz zmienić
+    )
+    embed.set_footer(text=f"Autor: {interaction.user}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
+    await interaction.response.send_message(embed=embed)
 
 # --- Uruchomienie ---
 keep_alive()
