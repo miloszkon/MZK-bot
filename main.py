@@ -1,34 +1,34 @@
 import discord
 from discord.ext import commands
 from discord.ui import View, Button, Select, Modal, TextInput
+from discord import app_commands, Embed
 import os
 import asyncio
 from datetime import datetime, timedelta
 from flask import Flask
 from threading import Thread
 
+# --- Intents i bot ---
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
 bot = commands.Bot(command_prefix='/', intents=intents)
 
-SUPPORT_CATEGORY_ID = 1384251116493082675  # Kategoria ticketów
-SUPPORT_ANNOUNCE_CHANNEL_ID = 1384272432654844085  # Kanał admin chat z pomysłami i zgłoszeniami
-MANAGEMENT_ROLE_ID = 1319634655875432519  # Rola management
+# --- Stałe ID ---
+SUPPORT_CATEGORY_ID = 1384251116493082675
+SUPPORT_ANNOUNCE_CHANNEL_ID = 1384272432654844085
+MANAGEMENT_ROLE_ID = 1319634655875432519
 
-active_tickets = {}  # user_id -> {"type": str, "timestamp": datetime, "channel": channel, "closed": bool}
-waiting_for_message = {}  # user_id -> "type"
+active_tickets = {}
+waiting_for_message = {}
 
 # --- Komenda /ticket-info ---
 @bot.tree.command(name="ticket-info", description="Informacje o systemie ticketów")
 async def ticket_info(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📩 System Ticketów i Pomocy",
-        description=(
-            "Kliknij **HELP** poniżej, aby rozpocząć.\n\n"
-            "Po kliknięciu bot wyśle Ci prywatną wiadomość z listą problemów."
-        ),
+        description="Kliknij **HELP** poniżej, aby rozpocząć.\n\nPo kliknięciu bot wyśle Ci prywatną wiadomość z listą problemów.",
         color=discord.Color.blue()
     )
     view = HelpButtonView()
@@ -48,14 +48,9 @@ class HelpButton(Button):
         try:
             await interaction.response.send_message("Sprawdź swoją prywatną wiadomość!", ephemeral=True)
             dm = await interaction.user.create_dm()
-            await dm.send(
-                "W czym możemy Ci pomóc? Wybierz problem z listy:",
-                view=TicketSelectView(interaction.user)
-            )
+            await dm.send("W czym możemy Ci pomóc? Wybierz problem z listy:", view=TicketSelectView(interaction.user))
         except discord.Forbidden:
-            await interaction.response.send_message(
-                "Nie mogę wysłać Ci wiadomości prywatnej. Ustaw, aby bot mógł pisać do Ciebie DM.", ephemeral=True
-            )
+            await interaction.response.send_message("Nie mogę wysłać Ci wiadomości prywatnej. Ustaw, aby bot mógł pisać do Ciebie DM.", ephemeral=True)
 
 # --- Wybór problemu ---
 class TicketSelectView(View):
@@ -78,18 +73,13 @@ class TicketSelect(Select):
     async def callback(self, interaction: discord.Interaction):
         user = interaction.user
         choice = self.values[0]
-
         try:
             await interaction.message.delete()
         except:
             pass
 
         if choice == "Połącz mnie z asystentem":
-            guild = None
-            for g in bot.guilds:
-                if g.get_member(user.id):
-                    guild = g
-                    break
+            guild = next((g for g in bot.guilds if g.get_member(user.id)), None)
             if not guild:
                 await interaction.response.send_message("Nie znaleziono serwera.", ephemeral=True)
                 return
@@ -113,21 +103,18 @@ class TicketSelect(Select):
             }
             await channel.send(f"{user.mention} otworzył ticket. Management może odpowiedzieć.", view=TicketActionView(channel))
             await interaction.response.send_message(f"Ticket został utworzony: {channel.mention}", ephemeral=True)
-            # Uruchamiamy monitor na brak aktywności użytkownika
             bot.loop.create_task(ticket_inactivity_watchdog(user.id))
         else:
-            # Inne opcje — czekamy na wiadomość użytkownika w DM
             waiting_for_message[user.id] = choice
             await interaction.response.send_message(
                 f"Wybrałeś: **{choice}**.\nNapisz teraz wiadomość w tej prywatnej wiadomości.",
                 ephemeral=True
             )
 
-# --- Przyciski na kanale ticket ---
+# --- Akcje ticketu ---
 class TicketActionView(View):
     def __init__(self, channel):
         super().__init__(timeout=None)
-        self.channel = channel
         self.add_item(ClimbButton(channel))
         self.add_item(RejectButton(channel))
 
@@ -152,14 +139,13 @@ class RejectButton(Button):
         if MANAGEMENT_ROLE_ID not in [role.id for role in interaction.user.roles]:
             await interaction.response.send_message("Nie masz uprawnień.", ephemeral=True)
             return
-
         ticket = next((t for t in active_tickets.values() if t["channel"].id == self.channel.id), None)
         if ticket:
             ticket["closed"] = True
             ticket["close_time"] = datetime.utcnow() + timedelta(minutes=5)
         await self.channel.send(f"Ticket zamknięty przez {interaction.user.mention}. Kanał zostanie usunięty za 5 minut.")
         await interaction.response.defer()
-        bot.loop.create_task(delete_channel_after_delay(self.channel, 5*60))
+        bot.loop.create_task(delete_channel_after_delay(self.channel, 300))
 
 async def delete_channel_after_delay(channel, delay_seconds):
     await asyncio.sleep(delay_seconds)
@@ -168,45 +154,37 @@ async def delete_channel_after_delay(channel, delay_seconds):
     except Exception as e:
         print(f"Nie udało się usunąć kanału: {e}")
 
-# --- Watchdog ticketu na brak aktywności ---
 async def ticket_inactivity_watchdog(user_id):
     while True:
         await asyncio.sleep(60)
         ticket = active_tickets.get(user_id)
         if not ticket or ticket["closed"]:
             return
-        delta = datetime.utcnow() - ticket["timestamp"]
-        if delta > timedelta(minutes=15):
+        if datetime.utcnow() - ticket["timestamp"] > timedelta(minutes=15):
             try:
-                channel = ticket["channel"]
-                await channel.send(f"Ticket zostanie zamknięty z powodu braku odpowiedzi użytkownika.")
+                await ticket["channel"].send("Ticket zostanie zamknięty z powodu braku odpowiedzi.")
                 ticket["closed"] = True
                 ticket["close_time"] = datetime.utcnow() + timedelta(minutes=5)
-                bot.loop.create_task(delete_channel_after_delay(channel, 5*60))
+                bot.loop.create_task(delete_channel_after_delay(ticket["channel"], 300))
             except Exception as e:
                 print(f"Błąd przy zamykaniu ticketu: {e}")
             return
 
-# --- Obsługa wiadomości DM od użytkowników ---
+# --- Obsługa wiadomości DM ---
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
-
     if isinstance(message.channel, discord.DMChannel):
         if message.author.id in waiting_for_message:
             typ = waiting_for_message.pop(message.author.id)
-
-            # Aktualizuj timestamp, jeśli ticket aktywny
             if message.author.id in active_tickets:
                 active_tickets[message.author.id]["timestamp"] = datetime.utcnow()
-
             kanal_admin = bot.get_channel(SUPPORT_ANNOUNCE_CHANNEL_ID)
-            if kanal_admin is None:
+            if not kanal_admin:
                 await message.channel.send("Błąd: nie znaleziono kanału administracyjnego.")
                 return
-
-            embed = discord.Embed(
+            embed = Embed(
                 title=f"💬 Nowa wiadomość: {typ}",
                 description=message.content,
                 color=discord.Color.orange(),
@@ -214,23 +192,14 @@ async def on_message(message):
             )
             embed.set_author(name=str(message.author), icon_url=message.author.display_avatar.url)
             embed.set_footer(text=f"ID: {message.author.id}")
-
-            view = AdminReplyView(message.author.id)
-
-            await kanal_admin.send(embed=embed, view=view)
-            await message.channel.send(embed=discord.Embed(
-                description="✅ Twoja wiadomość została zapisana i przesłana do administracji.",
-                color=discord.Color.green()
-            ))
+            await kanal_admin.send(embed=embed, view=AdminReplyView(message.author.id))
+            await message.channel.send(embed=Embed(description="✅ Twoja wiadomość została przesłana do administracji.", color=discord.Color.green()))
             return
-
     await bot.process_commands(message)
 
-# --- Widok i przycisk odpowiedzi admina ---
 class AdminReplyView(View):
     def __init__(self, user_id):
         super().__init__(timeout=None)
-        self.user_id = user_id
         self.add_item(AdminReplyButton(user_id))
 
 class AdminReplyButton(Button):
@@ -239,8 +208,7 @@ class AdminReplyButton(Button):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        modal = ReplyModal(self.user_id)
-        await interaction.response.send_modal(modal)
+        await interaction.response.send_modal(ReplyModal(self.user_id))
 
 class ReplyModal(Modal):
     def __init__(self, user_id):
@@ -254,9 +222,8 @@ class ReplyModal(Modal):
         if not user:
             await interaction.response.send_message("Nie można znaleźć użytkownika.", ephemeral=True)
             return
-
         try:
-            embed = discord.Embed(
+            embed = Embed(
                 title="💬 Odpowiedź od administracji",
                 description=self.response_input.value,
                 color=discord.Color.blue(),
@@ -268,7 +235,19 @@ class ReplyModal(Modal):
         except discord.Forbidden:
             await interaction.response.send_message("Nie można wysłać wiadomości użytkownikowi (DM zablokowane).", ephemeral=True)
 
-# --- Aktualizacja timestampu przy edycji wiadomości na kanale ticket ---
+# --- Komenda /ogloszenie ---
+@bot.tree.command(name="ogloszenie", description="Wysyła ogłoszenie jako embed")
+@app_commands.describe(tresc="Treść ogłoszenia do wysłania")
+async def ogloszenie(interaction: discord.Interaction, tresc: str):
+    embed = Embed(
+        title="📢 Ogłoszenie",
+        description=f"📝 {tresc}",
+        color=0x2ecc71
+    )
+    embed.set_footer(text=f"Autor: {interaction.user}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
+    await interaction.response.send_message(embed=embed)
+
+# --- Edycje wiadomości ---
 @bot.event
 async def on_message_edit(before, after):
     if after.author.bot:
@@ -278,7 +257,7 @@ async def on_message_edit(before, after):
             if after.author.id in active_tickets:
                 active_tickets[after.author.id]["timestamp"] = datetime.utcnow()
 
-# --- Flask keep-alive ---
+# --- Keep-alive (Flask) ---
 app = Flask('')
 
 @app.route('/')
@@ -289,18 +268,9 @@ def run():
     app.run(host='0.0.0.0', port=8080)
 
 def keep_alive():
-    t = Thread(target=run)
-    t.start()
-from discord.ext import commands
-from discord import Embed, app_commands
-import discord
-import os
+    Thread(target=run).start()
 
-intents = discord.Intents.default()
-intents.message_content = True  # upewnij się, że to masz
-
-bot = commands.Bot(command_prefix="!", intents=intents)
-
+# --- Start bota ---
 @bot.event
 async def on_ready():
     print(f'Zalogowano jako {bot.user}')
@@ -310,18 +280,6 @@ async def on_ready():
     except Exception as e:
         print(f"Błąd synchronizacji komend: {e}")
 
-@bot.tree.command(name="ogloszenie", description="Wysyła ogłoszenie jako embed")
-@app_commands.describe(tresc="Treść ogłoszenia do wysłania")
-async def ogloszenie(interaction: discord.Interaction, tresc: str):
-    embed = Embed(
-        title="📢 Ogłoszenie",
-        description=f"📝 {tresc}",
-        color=0x2ecc71  # zielony embed, możesz zmienić
-    )
-    embed.set_footer(text=f"Autor: {interaction.user}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
-    await interaction.response.send_message(embed=embed)
-
-# --- Uruchomienie ---
 keep_alive()
 TOKEN = os.getenv("DISCORD_TOKEN")
 bot.run(TOKEN)
