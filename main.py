@@ -7,11 +7,15 @@ import asyncio
 from datetime import datetime, timedelta
 from flask import Flask
 from threading import Thread
+from dotenv import load_dotenv
+
+load_dotenv()  # Wczytaj zmienne z .env
 
 # --- Intents i bot ---
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
+intents.guilds = True
 
 bot = commands.Bot(command_prefix='/', intents=intents)
 
@@ -34,7 +38,6 @@ async def ticket_info(interaction: discord.Interaction):
     view = HelpButtonView()
     await interaction.response.send_message(embed=embed, view=view)
 
-# --- Przycisk HELP ---
 class HelpButtonView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -52,7 +55,6 @@ class HelpButton(Button):
         except discord.Forbidden:
             await interaction.response.send_message("Nie mogę wysłać Ci wiadomości prywatnej. Ustaw, aby bot mógł pisać do Ciebie DM.", ephemeral=True)
 
-# --- Wybór problemu ---
 class TicketSelectView(View):
     def __init__(self, user):
         super().__init__(timeout=900)
@@ -111,7 +113,6 @@ class TicketSelect(Select):
                 ephemeral=True
             )
 
-# --- Akcje ticketu ---
 class TicketActionView(View):
     def __init__(self, channel):
         super().__init__(timeout=None)
@@ -170,7 +171,6 @@ async def ticket_inactivity_watchdog(user_id):
                 print(f"Błąd przy zamykaniu ticketu: {e}")
             return
 
-# --- Obsługa wiadomości DM ---
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -235,7 +235,6 @@ class ReplyModal(Modal):
         except discord.Forbidden:
             await interaction.response.send_message("Nie można wysłać wiadomości użytkownikowi (DM zablokowane).", ephemeral=True)
 
-# --- Komenda /ogloszenie ---
 @bot.tree.command(name="ogloszenie", description="Wysyła ogłoszenie jako embed")
 @app_commands.describe(tresc="Treść ogłoszenia do wysłania")
 async def ogloszenie(interaction: discord.Interaction, tresc: str):
@@ -247,7 +246,6 @@ async def ogloszenie(interaction: discord.Interaction, tresc: str):
     embed.set_footer(text=f"Autor: {interaction.user}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
     await interaction.response.send_message(embed=embed)
 
-# --- Edycje wiadomości ---
 @bot.event
 async def on_message_edit(before, after):
     if after.author.bot:
@@ -257,65 +255,44 @@ async def on_message_edit(before, after):
             if after.author.id in active_tickets:
                 active_tickets[after.author.id]["timestamp"] = datetime.utcnow()
 
-# --- Keep-alive (Flask) ---
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "Bot działa!"
-
-def run():
-    app.run(host='0.0.0.0', port=8080)
-
-def keep_alive():
-    Thread(target=run).start()
-
-import discord
-from discord import app_commands
-from discord.ext import commands
-
-intents = discord.Intents.default()
-intents.message_content = True
-intents.guilds = True
-intents.members = True
-
-bot = commands.Bot(command_prefix="!", intents=intents)
-
+# --- Komenda /wiadomosc ---
 class MessageModal(discord.ui.Modal, title="Wyślij wiadomość"):
-
-    message_type = discord.ui.Select(
-        placeholder="Wybierz typ wiadomości",
-        options=[
-            discord.SelectOption(label="Kanał", value="channel"),
-            discord.SelectOption(label="Prywatna", value="dm")
-        ],
-        custom_id="message_type_select"
-    )
-
-    message_content = discord.ui.TextInput(
-        label="Treść wiadomości",
-        style=discord.TextStyle.paragraph,
-        placeholder="Wpisz treść wiadomości...",
-        required=True,
-        max_length=2000
-    )
-
     def __init__(self, interaction: discord.Interaction):
         super().__init__()
         self.interaction = interaction
+
+        self.message_type = discord.ui.TextInput(
+            label="Typ wiadomości (dm / channel)",
+            placeholder="Wpisz: dm albo channel",
+            required=True,
+            max_length=10
+        )
+
+        self.message_content = discord.ui.TextInput(
+            label="Treść wiadomości",
+            style=discord.TextStyle.paragraph,
+            placeholder="Wpisz treść wiadomości...",
+            required=True,
+            max_length=2000
+        )
+
         self.add_item(self.message_type)
         self.add_item(self.message_content)
 
     async def on_submit(self, interaction: discord.Interaction):
-        selected_type = self.message_type.values[0]
+        typ = self.message_type.value.strip().lower()
         content = self.message_content.value
 
-        if selected_type == "channel":
-            await interaction.response.send_message("Wybierz kanał docelowy:", ephemeral=True, view=ChannelSelectView(content))
+        if typ == "dm":
+            try:
+                await self.interaction.user.send(content)
+                await interaction.response.send_message("✅ Wiadomość wysłana prywatnie!", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ Nie mogę wysłać wiadomości prywatnej.", ephemeral=True)
+        elif typ == "channel":
+            await interaction.response.send_message("📢 Wybierz kanał:", ephemeral=True, view=ChannelSelectView(content))
         else:
-            await self.interaction.user.send(content)
-            await interaction.response.send_message("Wiadomość została wysłana prywatnie!", ephemeral=True)
-
+            await interaction.response.send_message("❗ Wpisz `dm` lub `channel` jako typ.", ephemeral=True)
 
 class ChannelSelect(discord.ui.Select):
     def __init__(self, content):
@@ -330,37 +307,43 @@ class ChannelSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         channel_id = int(self.values[0])
         channel = bot.get_channel(channel_id)
-        await channel.send(self.content)
-        await interaction.response.send_message(f"Wiadomość wysłana na kanał **{channel.name}**", ephemeral=True)
-
+        if channel:
+            await channel.send(self.content)
+            await interaction.response.send_message(f"✅ Wiadomość wysłana na **{channel.name}**", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Nie znaleziono kanału.", ephemeral=True)
 
 class ChannelSelectView(discord.ui.View):
     def __init__(self, content):
         super().__init__()
         self.add_item(ChannelSelect(content))
 
-
 @bot.tree.command(name="wiadomosc", description="Wyślij wiadomość przez bota")
 async def wiadomosc(interaction: discord.Interaction):
     await interaction.response.send_modal(MessageModal(interaction))
 
+# --- Flask keep-alive ---
+app = Flask('')
 
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    print(f"Zalogowano jako {bot.user}")
+@app.route('/')
+def home():
+    return "Bot działa!"
 
-bot.run("TWÓJ_TOKEN_BOTA")
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    Thread(target=run).start()
 
 # --- Start bota ---
 @bot.event
 async def on_ready():
-    print(f'Zalogowano jako {bot.user}')
+    print(f'✅ Zalogowano jako {bot.user}')
     try:
         synced = await bot.tree.sync()
-        print(f"Zsynchronizowano {len(synced)} komend slash.")
+        print(f"✅ Zsynchronizowano {len(synced)} komend slash.")
     except Exception as e:
-        print(f"Błąd synchronizacji komend: {e}")
+        print(f"❌ Błąd synchronizacji: {e}")
 
 keep_alive()
 TOKEN = os.getenv("DISCORD_TOKEN")
