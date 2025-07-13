@@ -255,7 +255,6 @@ async def on_message_edit(before, after):
             if after.author.id in active_tickets:
                 active_tickets[after.author.id]["timestamp"] = datetime.utcnow()
 
-
 # --- Flask keep-alive ---
 app = Flask('')
 
