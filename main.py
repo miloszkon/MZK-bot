@@ -335,6 +335,47 @@ def run():
 def keep_alive():
     Thread(target=run).start()
 
+# --- Komenda /chatp: Wyślij wiadomość prywatną do wskazanego użytkownika ---
+@bot.tree.command(name="chatp", description="Wyślij prywatną wiadomość do wskazanego użytkownika")
+@app_commands.describe(user="Użytkownik, do którego chcesz wysłać wiadomość")
+async def chatp(interaction: discord.Interaction, user: discord.User):
+    await interaction.response.send_modal(ChatpModal(user))
+
+
+class ChatpModal(discord.ui.Modal, title="Wpisz treść wiadomości"):
+    def __init__(self, target_user: discord.User):
+        super().__init__()
+        self.target_user = target_user
+
+        self.message_content = discord.ui.TextInput(
+            label="Treść wiadomości",
+            style=discord.TextStyle.paragraph,
+            placeholder="Wpisz wiadomość, którą chcesz wysłać...",
+            required=True,
+            max_length=2000
+        )
+        self.add_item(self.message_content)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            embed = Embed(
+                title="💬 Otrzymałeś wiadomość od administracji",
+                description=self.message_content.value,
+                color=discord.Color.blurple(),
+                timestamp=datetime.utcnow()
+            )
+            embed.set_footer(
+                text=f"Nadawca: {interaction.user}",
+                icon_url=interaction.user.avatar.url if interaction.user.avatar else None
+            )
+            await self.target_user.send(embed=embed)
+            await interaction.response.send_message(f"✅ Wiadomość została wysłana do {self.target_user.mention}.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "❌ Nie mogę wysłać wiadomości — użytkownik ma wyłączone wiadomości prywatne.",
+                ephemeral=True
+            )
+
 # --- Start bota ---
 @bot.event
 async def on_ready():
