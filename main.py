@@ -12,6 +12,7 @@ from threading import Thread
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
+intents.guilds = True
 
 bot = commands.Bot(command_prefix='/', intents=intents)
 
@@ -247,7 +248,7 @@ async def ogloszenie(interaction: discord.Interaction, tresc: str):
     embed.set_footer(text=f"Autor: {interaction.user}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
     await interaction.response.send_message(embed=embed)
 
-# --- Edycje wiadomości ---
+# --- Obsługa edycji wiadomości ---
 @bot.event
 async def on_message_edit(before, after):
     if after.author.bot:
@@ -257,7 +258,7 @@ async def on_message_edit(before, after):
             if after.author.id in active_tickets:
                 active_tickets[after.author.id]["timestamp"] = datetime.utcnow()
 
-# --- Keep-alive (Flask) ---
+# --- Keep-alive dla Rendera ---
 app = Flask('')
 
 @app.route('/')
@@ -270,88 +271,16 @@ def run():
 def keep_alive():
     Thread(target=run).start()
 
-import discord
-from discord import app_commands
-from discord.ext import commands
-
-intents = discord.Intents.default()
-intents.message_content = True
-intents.guilds = True
-intents.members = True
-
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-class MessageModal(discord.ui.Modal, title="Wyślij wiadomość"):
-
-    message_type = discord.ui.Select(
-        placeholder="Wybierz typ wiadomości",
-        options=[
-            discord.SelectOption(label="Kanał", value="channel"),
-            discord.SelectOption(label="Prywatna", value="dm")
-        ],
-        custom_id="message_type_select"
-    )
-
-    message_content = discord.ui.TextInput(
-        label="Treść wiadomości",
-        style=discord.TextStyle.paragraph,
-        placeholder="Wpisz treść wiadomości...",
-        required=True,
-        max_length=2000
-    )
-
-    def __init__(self, interaction: discord.Interaction):
-        super().__init__()
-        self.interaction = interaction
-        self.add_item(self.message_type)
-        self.add_item(self.message_content)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        selected_type = self.message_type.values[0]
-        content = self.message_content.value
-
-        if selected_type == "channel":
-            await interaction.response.send_message("Wybierz kanał docelowy:", ephemeral=True, view=ChannelSelectView(content))
-        else:
-            await self.interaction.user.send(content)
-            await interaction.response.send_message("Wiadomość została wysłana prywatnie!", ephemeral=True)
-
-
-class ChannelSelect(discord.ui.Select):
-    def __init__(self, content):
-        self.content = content
-        options = [
-            discord.SelectOption(label=channel.name, value=str(channel.id))
-            for channel in bot.get_all_channels()
-            if isinstance(channel, discord.TextChannel)
-        ]
-        super().__init__(placeholder="Wybierz kanał", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        channel_id = int(self.values[0])
-        channel = bot.get_channel(channel_id)
-        await channel.send(self.content)
-        await interaction.response.send_message(f"Wiadomość wysłana na kanał **{channel.name}**", ephemeral=True)
-
-
-class ChannelSelectView(discord.ui.View):
-    def __init__(self, content):
-        super().__init__()
-        self.add_item(ChannelSelect(content))
-
-
-@bot.tree.command(name="wiadomosc", description="Wyślij wiadomość przez bota")
-async def wiadomosc(interaction: discord.Interaction):
-    await interaction.response.send_modal(MessageModal(interaction))
-
-
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    print(f"Zalogowano jako {bot.user}")
-
-bot.run("TWÓJ_TOKEN_BOTA")
+keep_alive()
 
 # --- Start bota ---
 @bot.event
 async def on_ready():
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ Zsynchronizowano {len(synced)} komend slash.")
+    except Exception as e:
+        print(f"❌ Błąd synchronizacji: {e}")
+    print(f"✅ Zalogowano jako {bot.user}")
+
+bot.run(os.getenv("DISCORD_TOKEN"))
